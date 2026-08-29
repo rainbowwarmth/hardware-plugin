@@ -1,0 +1,97 @@
+{
+  "name": "@yunzai-ng/hardware-plugin",
+  "version": "0.1.0",
+  "description": "硬件信息插件：全机 CPU / 内存 / 显卡占用，兼作面板插件的示例",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "author": "Yunzai-NG",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "webuiPanel": {
+    "server": "dist/index.js",
+    "config": {
+      "type": "object",
+      "properties": {
+        "redis": {
+          "type": "object",
+          "group": "Redis",
+          "order": 10,
+          "properties": {
+            "host": {
+              "type": "string",
+              "title": "主机",
+              "description": "内核默认用文件存储，多数部署没有 Redis —— 那时这一枚组件显示「连接失败」，而它默认不上板",
+              "default": "127.0.0.1",
+              "placeholder": "127.0.0.1"
+            },
+            "port": {
+              "type": "number",
+              "title": "端口",
+              "default": 6379,
+              "min": 1,
+              "max": 65535
+            }
+          }
+        },
+        "probes": {
+          "type": "record",
+          "title": "对外探测",
+          "widget": "keyValue",
+          "group": "网络",
+          "order": 20,
+          "description": "名字 → 地址，默认为空即不发任何对外请求。每拍各探一次并显示状态码与耗时；离网部署请留空",
+          "values": { "type": "string" },
+          "default": {}
+        }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yunzai-NG/hardware-plugin.git"
+  },
+  "homepage": "https://github.com/Yunzai-NG/hardware-plugin",
+  "bugs": {
+    "url": "https://github.com/Yunzai-NG/hardware-plugin/issues"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "files": ["dist", "src", "index.js", "widgets"],
+  "scripts": {
+    "build": "tsc -b",
+    "build:clean": "tsc -b --clean",
+    "link:framework": "node scripts/link-framework.mjs",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "verify": "pnpm run build && pnpm run typecheck:test && pnpm run lint && pnpm run test"
+  },
+  "dependencies": {
+    "systeminformation": "5.33.2"
+  },
+  "peerDependencies": {
+    "@yunzai-ng/core": "^0.1.0",
+    "@yunzai-ng/types": "^0.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "eslint-plugin-jsdoc": "^50.6.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

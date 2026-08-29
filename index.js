@@ -1,0 +1,32 @@
+/**
+ * 模块职责：浏览器侧入口 —— 把本包提供的九枚组件汇总成一份清单交给 webui
+ * 依赖方向：只 import 同目录下的 `widgets/*.js`（同源相对路径）；不 import 任何包
+ * 生命周期：webui 在页面加载期 `import()` 本文件一次
+ * 注意事项：**多文件面板插件包的浏览器入口固定是包根的 `index.js`。** webui 只 import 这一个文件，
+ *          其余靠相对路径由它自己引 —— 整个包目录都是静态可取的。
+ *
+ *          **默认导出是一个数组。** 本包给出九枚组件，若坚持「一文件一组件」使用者就得装九个包。
+ *          数组里有一枚写错时其余照常上板，被丢掉的那枚在控制台留一句「第 N 个组件：……」。
+ *
+ *          **数组顺序即默认版面顺序**（注册表按注册顺序补空位）。故排法是「先占用、后清单」：
+ *          四枚占用类在前，磁盘与网络居中，进程表、系统信息与 Redis 在后 —— 那三枚是「要查什么
+ *          才去看」的，不该占据视线最先落到的位置。
+ *
+ *          **九枚里有八枚 `defaultHidden`。** 装一个插件不该重排任何人的版面，而九枚一齐上板等于把
+ *          概览页整个换掉。例外是 CPU 那一枚：webui 内置的本进程 CPU 环与显卡环已撤，若它也默认不
+ *          上板，升级后的概览页会**少掉**一枚环而不是换掉一枚 —— 那是使用者没要求过的减少。
+ *
+ *          **不能 import 裸包名。** 浏览器按 URL 解析模块说明符，`import si from "systeminformation"`
+ *          在这里是一条网络错误。要用的能力一概经注入的 `api` 取；node 侧的依赖是那一半的事。
+ */
+import cpu from "./widgets/hardware-cpu.js"
+import disk from "./widgets/hardware-disk.js"
+import gpu from "./widgets/hardware-gpu.js"
+import memory from "./widgets/hardware-memory.js"
+import net from "./widgets/hardware-net.js"
+import processes from "./widgets/hardware-processes.js"
+import redis from "./widgets/hardware-redis.js"
+import swap from "./widgets/hardware-swap.js"
+import sysinfo from "./widgets/hardware-sysinfo.js"
+
+export default [cpu, memory, swap, gpu, disk, net, processes, sysinfo, redis]

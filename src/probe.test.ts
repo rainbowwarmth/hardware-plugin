@@ -1,0 +1,369 @@
+/**
+ * `probe.ts` 的用例
+ *
+ * 三处 mock，都是为了让用例跑得动而不是为了省事：
+ * - `systeminformation` 的三个探测各要 0.7~2.3 秒，且返回值随机器而变 —— 真跑一遍
+ *   既慢又没法断言。
+ * - `@yunzai-ng/core` 的 `probeGpus` 会 spawn nvidia-smi。用工厂 mock 而非 spy，
+ *   这样连 core 那个模块都不会被加载（它带 level / sqlite 等原生模块）。
+ * - `node:os` 的 `cpus`。**这一处非 mock 不可**：整机 CPU 靠两个采样点作差，而用例里
+ *   两次采样相隔几毫秒，真实的累计量尚未前进，于是 `span <= 0`、按设计返回 undefined。
+ *   也就是说「第二次采样带上 cpu」这条用例在真时钟下永远量不到东西 —— 它要验的是
+ *   差分算得对，而不是「跑够一个时钟节拍会发生什么」。`totalmem` / `freemem` 仍走真的，
+ *   内存那几条用例断言的正是真实数值之间的关系。
+ *
+ * 断言的重点是「测不到时缺字段而不是给 0」这一类决定 —— 那是本模块存在的理由所在，
+ * 也是唯一会被日后改动悄悄破坏的东西。
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+const probeGpus = vi.fn<() => Promise<unknown>>()
+const siCpu = vi.fn<() => Promise<unknown>>()
+const siMemLayout = vi.fn<() => Promise<unknown>>()
+const siGraphics = vi.fn<() => Promise<unknown>>()
+const siMem = vi.fn<() => Promise<unknown>>()
+const osCpus = vi.fn<() => { times: { user: number; nice: number; sys: number; idle: number; irq: number } }[]>()
+
+vi.mock("@yunzai-ng/core", () => ({ probeGpus: (): Promise<unknown> => probeGpus() }))
+vi.mock("systeminformation", () => ({
+  default: {
+    cpu: (): Promise<unknown> => siCpu(),
+    memLayout: (): Promise<unknown> => siMemLayout(),
+    graphics: (): Promise<unknown> => siGraphics(),
+    mem: (): Promise<unknown> => siMem()
+  }
+}))
+vi.mock("node:os", async () => {
+  const real = await vi.importActual<typeof import("node:os")>("node:os")
+  return { ...real, cpus: () => osCpus() }
+})
+
+const {
+  HardwareSampler,
+  cpuLoad,
+  cpuTimes,
+  looksFakeGpu,
+  looksNvidia,
+  mergeGpus,
+  sampleMemory,
+  swapOf
+} = await import("./probe.js")
+
+/**
+ * 造一个核心的时间累计量
+ * @param idle 空闲累计
+ * @param busy 非空闲累计，摊进 user
+ * @returns 一个形如 `os.cpus()[i]` 的对象
+ */
+function core(idle: number, busy: number): { times: { user: number; nice: number; sys: number; idle: number; irq: number } } {
+  return { times: { user: busy, nice: 0, sys: 0, idle, irq: 0 } }
+}
+
+beforeEach(() => {
+  probeGpus.mockResolvedValue(undefined)
+  siCpu.mockResolvedValue({})
+  siMemLayout.mockResolvedValue([])
+  siGraphics.mockResolvedValue({ controllers: [] })
+  // 缺省不给交换空间：`swaptotal` 为 0 时按设计不出现 swap 字段，故多数用例无须理它
+  siMem.mockResolvedValue({ swaptotal: 0, swapused: 0 })
+  // 缺省让累计量停着不动：多数用例并不关心 CPU，而停着的时钟正好让
+  //「无差可作时不给 cpu 字段」成为默认行为，不必每条用例都去安排
+  osCpus.mockReturnValue([core(1000, 1000)])
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+describe("cpuTimes", () => {
+  it("把各核的累计量相加", () => {
+    expect(cpuTimes([core(100, 50), core(200, 150)])).toEqual({ idle: 300, total: 500 })
+  })
+
+  it("一个核都没有时给两个 0，交由 cpuLoad 判定算不出", () => {
+    expect(cpuTimes([])).toEqual({ idle: 0, total: 0 })
+  })
+
+  it("total 含 idle —— 它是分母而不是「忙的时间」", () => {
+    const sum = cpuTimes([core(700, 300)])
+    expect(sum.total).toBe(1000)
+  })
+})
+
+describe("cpuLoad", () => {
+  it("没有上一个采样点时给 undefined 而不是 0", () => {
+    expect(cpuLoad(undefined, { idle: 700, total: 1000 })).toBeUndefined()
+  })
+
+  it("由两点之差算出占用率", () => {
+    // 这段时间里总计走了 1000，其中空闲 300，即忙了 70%
+    expect(cpuLoad({ idle: 700, total: 1000 }, { idle: 1000, total: 2000 })).toBeCloseTo(0.7)
+  })
+
+  it("总计量没有前进时给 undefined —— 两次采样落在同一毫秒", () => {
+    expect(cpuLoad({ idle: 700, total: 1000 }, { idle: 700, total: 1000 })).toBeUndefined()
+  })
+
+  it("总计量倒退时给 undefined —— 系统时间被回拨", () => {
+    expect(cpuLoad({ idle: 700, total: 2000 }, { idle: 700, total: 1000 })).toBeUndefined()
+  })
+
+  it("空闲量倒退时不会算出大于 1 的比例", () => {
+    expect(cpuLoad({ idle: 900, total: 1000 }, { idle: 800, total: 2000 })).toBeLessThanOrEqual(1)
+  })
+
+  it("全程空闲给 0", () => {
+    expect(cpuLoad({ idle: 700, total: 1000 }, { idle: 1700, total: 2000 })).toBe(0)
+  })
+})
+
+describe("looksFakeGpu", () => {
+  it("认得出本机那两个虚拟显示器", () => {
+    expect(looksFakeGpu("ToDesk Virtual Display")).toBe(true)
+    expect(looksFakeGpu("GameViewer Display Adapter")).toBe(true)
+  })
+
+  it("不认大小写", () => {
+    expect(looksFakeGpu("PARSEC VIRTUAL DISPLAY ADAPTER")).toBe(true)
+  })
+
+  it("放过真显卡", () => {
+    expect(looksFakeGpu("NVIDIA GeForce RTX 4060 Laptop GPU")).toBe(false)
+    expect(looksFakeGpu("Intel(R) Arc(TM) 140V GPU")).toBe(false)
+    expect(looksFakeGpu("AMD Radeon 780M")).toBe(false)
+  })
+})
+
+describe("looksNvidia", () => {
+  it("认得出 N 卡的几种写法", () => {
+    expect(looksNvidia("NVIDIA GeForce RTX 4060")).toBe(true)
+    expect(looksNvidia("Quadro P2000")).toBe(true)
+    expect(looksNvidia("Tesla T4")).toBe(true)
+  })
+
+  it("不把别家的卡认成 N 卡", () => {
+    expect(looksNvidia("Intel(R) UHD Graphics")).toBe(false)
+    expect(looksNvidia("AMD Radeon 780M")).toBe(false)
+  })
+})
+
+describe("mergeGpus", () => {
+  it("两路都空时给空数组", () => {
+    expect(mergeGpus(undefined, undefined)).toEqual([])
+  })
+
+  it("只有型号表时保留型号，不编造占用率", () => {
+    const merged = mergeGpus([{ name: "Intel Arc 140V", memoryTotal: 0 }], undefined)
+    expect(merged).toEqual([{ name: "Intel Arc 140V" }])
+    expect(merged[0]?.load).toBeUndefined()
+  })
+
+  it("排掉虚拟显示器", () => {
+    const merged = mergeGpus(
+      [{ name: "Intel Arc 140V" }, { name: "ToDesk Virtual Display" }, { name: "GameViewer" }],
+      undefined
+    )
+    expect(merged.map(item => item.name)).toEqual(["Intel Arc 140V"])
+  })
+
+  it("有 nvidia-smi 的结果时丢掉型号表里的 N 卡，同一块卡不出现两次", () => {
+    const merged = mergeGpus(
+      [{ name: "NVIDIA GeForce RTX 4060 Laptop GPU" }, { name: "Intel Arc 140V" }],
+      [{ name: "NVIDIA GeForce RTX 4060 Laptop GPU", load: 0.31 }]
+    )
+    expect(merged).toHaveLength(2)
+    expect(merged[0]).toEqual({ name: "NVIDIA GeForce RTX 4060 Laptop GPU", load: 0.31 })
+    expect(merged[1]).toEqual({ name: "Intel Arc 140V" })
+  })
+
+  it("量到的那一路排在前面", () => {
+    const merged = mergeGpus([{ name: "Intel Arc 140V" }], [{ name: "RTX 4060", load: 0.5 }])
+    expect(merged[0]?.name).toBe("RTX 4060")
+  })
+
+  it("显存为 0 的型号不带 memoryTotal —— 集显与虚拟屏都是 0", () => {
+    const merged = mergeGpus([{ name: "Intel Arc 140V", memoryTotal: 0 }], undefined)
+    expect(merged[0]).toEqual({ name: "Intel Arc 140V" })
+    expect(Object.keys(merged[0] ?? {})).toEqual(["name"])
+  })
+
+  it("显存非 0 时带上", () => {
+    const merged = mergeGpus([{ name: "RTX 4060", memoryTotal: 8 * 1024 ** 3 }], undefined)
+    expect(merged[0]?.memoryTotal).toBe(8 * 1024 ** 3)
+  })
+})
+
+describe("sampleMemory", () => {
+  it("已用加可用等于总量", () => {
+    const mem = sampleMemory()
+    expect(mem.used + mem.free).toBe(mem.total)
+  })
+
+  it("总量是个正数", () => {
+    expect(sampleMemory().total).toBeGreaterThan(0)
+  })
+})
+
+describe("swapOf", () => {
+  it("取总量与已用，可用由两者相减", () => {
+    expect(swapOf({ swaptotal: 1000, swapused: 400 })).toEqual({ total: 1000, used: 400, free: 600 })
+  })
+
+  /*
+   * 这一条是本函数存在的理由
+   *
+   * 未配置交换空间是常态（容器里、以及刻意关掉 swap 的机器）。若给出一条 0% 的槽，
+   * 使用者读到的是「交换空间没在用」，而事实是「这台机器没有交换空间」—— 两者相反：
+   * 前者说明内存宽裕，后者说明内存吃紧时会直接 OOM。故该让这一条整个不出现。
+   */
+  it("**总量为 0 时不出现，而不是一条 0% 的槽** —— 没有交换空间与没在用交换空间是相反的两件事", () => {
+    expect(swapOf({ swaptotal: 0, swapused: 0 })).toBeUndefined()
+  })
+
+  it("取不到 si.mem() 时同样不出现", () => {
+    expect(swapOf(undefined)).toBeUndefined()
+  })
+
+  it("已用缺失时记 0，但总量在故这一条照常出现 —— 有交换空间这件事本身要说出来", () => {
+    expect(swapOf({ swaptotal: 2000 })).toEqual({ total: 2000, used: 0, free: 2000 })
+  })
+
+  it("已用超过总量时夹到总量，不给出负的可用量", () => {
+    expect(swapOf({ swaptotal: 100, swapused: 500 })).toEqual({ total: 100, used: 100, free: 0 })
+  })
+})
+
+describe("HardwareSampler", () => {
+  it("首次采样不带 cpu 字段 —— 无差可作，0 会被读成机器闲着", async () => {
+    const sampler = new HardwareSampler()
+    const first = await sampler.sample()
+    expect("cpu" in first).toBe(false)
+  })
+
+  it("第二次采样带上 cpu，且取的是两点之间那一段", async () => {
+    const sampler = new HardwareSampler()
+    osCpus.mockReturnValue([core(1000, 1000)])
+    await sampler.sample()
+    // 这一段里空闲走了 30、总计走了 100，故占用为 70%。断言确切的数而不只是
+    //「是个 number」：后者在把差分写成「拿本次的累计量直接算比例」时照样能过
+    osCpus.mockReturnValue([core(1030, 1070)])
+    const second = await sampler.sample(true)
+    expect(second.cpu).toBeCloseTo(0.7, 10)
+  })
+
+  it("内存每次都有 —— 它不需要两个采样点", async () => {
+    const sampler = new HardwareSampler()
+    const first = await sampler.sample()
+    expect(first.memory.total).toBeGreaterThan(0)
+  })
+
+  it("缓存生效时不重复调 probeGpus", async () => {
+    const sampler = new HardwareSampler()
+    await sampler.sample()
+    await sampler.sample()
+    expect(probeGpus).toHaveBeenCalledTimes(1)
+  })
+
+  it("force 绕过缓存", async () => {
+    const sampler = new HardwareSampler()
+    await sampler.sample()
+    await sampler.sample(true)
+    expect(probeGpus).toHaveBeenCalledTimes(2)
+  })
+
+  it("型号探测只发起一次，五秒一轮的请求不会各起一趟", async () => {
+    const sampler = new HardwareSampler()
+    await sampler.sample()
+    await sampler.sample(true)
+    await sampler.sample(true)
+    expect(siCpu).toHaveBeenCalledTimes(1)
+  })
+
+  it("首次采样不等型号探完，故那一份里没有 models", async () => {
+    let release = (): void => {}
+    siCpu.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          release = (): void => resolve({ brand: "Ultra 9 285H" })
+        })
+    )
+    const sampler = new HardwareSampler()
+    const first = await sampler.sample()
+    expect(first.models).toBeUndefined()
+    release()
+  })
+
+  it("型号探完后的下一轮带上 models", async () => {
+    siCpu.mockResolvedValue({ brand: "Ultra 9 285H", cores: 16, physicalCores: 10 })
+    siMemLayout.mockResolvedValue([{ size: 16 * 1024 ** 3, type: "DDR5", clockSpeed: 6400 }])
+    const sampler = new HardwareSampler()
+    await sampler.sample()
+    await sampler.probeModels()
+    const later = await sampler.sample(true)
+    expect(later.models).toEqual({
+      cpu: "Ultra 9 285H",
+      cores: 16,
+      physicalCores: 10,
+      memoryType: "DDR5",
+      memoryClock: 6400
+    })
+  })
+
+  it("型号里取不到的项不出现，而不是空字符串或 0", async () => {
+    siCpu.mockResolvedValue({ brand: "", cores: 0 })
+    siMemLayout.mockResolvedValue([{ size: 0, type: "", clockSpeed: 0 }])
+    const sampler = new HardwareSampler()
+    await sampler.probeModels()
+    const info = await sampler.sample(true)
+    expect(info.models).toEqual({})
+  })
+
+  it("某一项探测抛错只让该项缺失，其余照常", async () => {
+    siMemLayout.mockRejectedValue(new Error("Termux 上读不到"))
+    siCpu.mockResolvedValue({ brand: "Ultra 9 285H" })
+    const warn = vi.fn()
+    const sampler = new HardwareSampler(warn)
+    await sampler.probeModels()
+    const info = await sampler.sample(true)
+    expect(info.models).toEqual({ cpu: "Ultra 9 285H" })
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it("显卡占用探测抛错不影响整份快照", async () => {
+    probeGpus.mockRejectedValue(new Error("nvidia-smi 崩了"))
+    const warn = vi.fn()
+    const sampler = new HardwareSampler(warn)
+    const info = await sampler.sample()
+    expect(info.memory.total).toBeGreaterThan(0)
+    expect(info.gpus).toEqual([])
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it("显卡型号表里的虚拟显示器不会进快照", async () => {
+    siGraphics.mockResolvedValue({
+      controllers: [
+        { model: "Intel(R) Arc(TM) 140V GPU", vram: 0 },
+        { model: "ToDesk Virtual Display", vram: 0 },
+        { model: "GameViewer Display", vram: 0 }
+      ]
+    })
+    const sampler = new HardwareSampler()
+    await sampler.probeModels()
+    const info = await sampler.sample(true)
+    expect(info.gpus.map(item => item.name)).toEqual(["Intel(R) Arc(TM) 140V GPU"])
+  })
+
+  it("没有型号的控制器条目直接丢掉", async () => {
+    siGraphics.mockResolvedValue({ controllers: [{ vram: 0 }, { model: "", vram: 0 }] })
+    const sampler = new HardwareSampler()
+    await sampler.probeModels()
+    const info = await sampler.sample(true)
+    expect(info.gpus).toEqual([])
+  })
+
+  it("不传 warn 时出错也不抛", async () => {
+    siCpu.mockRejectedValue(new Error("坏了"))
+    const sampler = new HardwareSampler()
+    await expect(sampler.probeModels()).resolves.toBeUndefined()
+  })
+})
