@@ -15,7 +15,7 @@
  * 本模块无依赖，故本文件不 mock 任何东西。
  */
 import { describe, expect, it } from "vitest"
-import { RING_CIRCUMFERENCE, RING_RADIUS, RING_VIEWBOX, dualRing } from "./rings.js"
+import { RING_CIRCUMFERENCE, RING_RADIUS, RING_VIEWBOX, dualRing, ringLegend } from "./rings.js"
 
 /**
  * 取一段弧画出来的那一截有多长
@@ -132,5 +132,61 @@ describe("dualRing", () => {
       expect(Number(ring.own.offset)).toBeGreaterThanOrEqual(0)
       expect(Number(ring.rest.offset)).toBeGreaterThanOrEqual(0)
     }
+  })
+})
+
+/*
+ * 三条图例的断言
+ *
+ * 图例上那三个百分数是使用者唯一能核对环的凭据，而它们算错同样不报错：一枚
+ * 「其他占用 -3%」或一组加起来 97% 的图例，看上去与正确的没有分别。
+ */
+describe("ringLegend", () => {
+  it("三条的顺序是本进程、其他、空闲 —— 与环上自内向外的次序一致", () => {
+    const items = ringLegend(0.5, 0.2, "yunzai-ng")
+    expect(items.map(item => item.kind)).toEqual(["own", "rest", "idle"])
+    expect(items[0]!.label).toBe("yunzai-ng")
+  })
+
+  it("**三条加起来恰好是 1** —— 加不满时使用者会以为哪一段没算上", () => {
+    const items = ringLegend(0.35, 0.08, "本进程")
+    const sum = items.reduce((acc, item) => acc + (item.ratio ?? 0), 0)
+    expect(sum).toBeCloseTo(1, 10)
+  })
+
+  it("「其他」是整机减本进程，不是另采的一个数", () => {
+    const items = ringLegend(0.4, 0.1, "本进程")
+    expect(items[1]!.ratio).toBeCloseTo(0.3, 10)
+  })
+
+  it("空闲是 1 减整机 —— 与本进程占多少无关", () => {
+    expect(ringLegend(0.4, 0.1, "本进程")[2]!.ratio).toBeCloseTo(0.6, 10)
+    expect(ringLegend(0.4, 0.35, "本进程")[2]!.ratio).toBeCloseTo(0.6, 10)
+  })
+
+  it("**整机测不到时「其他」与「空闲」都给 undefined** —— 一条「其他 0%」会被读成「只有机器人在跑」", () => {
+    const items = ringLegend(undefined, 0.2, "本进程")
+    expect(items[0]!.ratio).toBe(0.2)
+    expect(items[1]!.ratio).toBeUndefined()
+    expect(items[2]!.ratio).toBeUndefined()
+  })
+
+  it("本进程超过整机时按夹紧后的值算，故「其他」不会是负数", () => {
+    const items = ringLegend(0.03, 0.05, "本进程")
+    expect(items[0]!.ratio).toBe(0.03)
+    expect(items[1]!.ratio).toBe(0)
+    expect(items[2]!.ratio).toBeCloseTo(0.97, 10)
+  })
+
+  it("本进程测不到而整机有数时，「其他」即整机 —— 那时无从分辨谁占的", () => {
+    const items = ringLegend(0.6, undefined, "本进程")
+    expect(items[0]!.ratio).toBeUndefined()
+    expect(items[1]!.ratio).toBeCloseTo(0.6, 10)
+    expect(items[2]!.ratio).toBeCloseTo(0.4, 10)
+  })
+
+  it("满载时空闲为 0 —— 这一条是真的 0，不是测不到", () => {
+    const items = ringLegend(1, 0.4, "本进程")
+    expect(items[2]!.ratio).toBe(0)
   })
 })

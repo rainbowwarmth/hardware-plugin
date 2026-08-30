@@ -16,6 +16,7 @@
   },
   "webuiPanel": {
     "server": "dist/index.js",
+    "style": "style.css",
     "config": {
       "type": "object",
       "properties": {
@@ -65,7 +66,7 @@
     "node": ">=20.11.0"
   },
   "packageManager": "pnpm@9.15.4",
-  "files": ["dist", "src", "index.js", "widgets"],
+  "files": ["dist", "src", "index.js", "widgets", "style.css"],
   "scripts": {
     "build": "tsc -b",
     "build:clean": "tsc -b --clean",

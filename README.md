@@ -7,15 +7,18 @@ Yunzai NG 的硬件信息插件：整机 CPU、内存与各显卡占用，兼作
 
 ## 它做什么
 
-装上并重载面板之后，概览页的「添加组件」里会多出三枚组件：**CPU（全机）**、
-**内存（全机）**、**显卡（全机）**，各是一条或几条线性槽。
+装上并重载面板之后，概览页的「添加组件」里会多出十枚组件：**系统**、**CPU**、**内存**、
+**交换空间**、**显卡**、**磁盘**、**网络**、**进程**、**系统信息**、**Redis**。
 
-内置的 CPU / 内存两枚环取的是**本进程**的占用，本插件取的是**整机**。两者并存而不互相
-取代 —— 取代等于让一个插件装没装改变默认版面。故本插件的标题一律带「（全机）」后缀，卡片
-下方另写明取数口径。
+其中**只有「系统」默认上板**，余下九枚出现在编辑态的「已移除」一栏里。装一个插件不该重排
+任何人已排好的版面，而十枚一齐上板等于把概览页整个换掉。
 
-三枚里 CPU 与显卡**默认不上板**（只出现在编辑态的「已移除」一栏）：装一个插件不该改动任何人
-已排好的版面，而多数机器上显卡占用率根本测不到（`nvidia-smi` 只在 N 卡上有）。
+「系统」那一枚把 CPU 与内存合在一张卡上说：左侧是型号、核数、总量、使用量这类一眼扫完的
+事实，右侧两枚环各带三段图例 —— **Yunzai NG 占用 / 其他占用 / 空闲**，三行加起来恰是
+100%。「其他占用」没有任何接口直接给，它是整机减本进程算出来的。
+
+CPU 与内存那两枚单环仍在包里，给「只想要一枚环、不要那张事实表」的人。**它们与「系统」
+不该同时上板** —— 同一份采样在一页上出现两次，读者只会怀疑哪一个是错的。
 
 数据也可直接取用：`GET /plugin/hardware/hardware`（照常鉴权）。
 
@@ -29,21 +32,27 @@ Yunzai NG 的硬件信息插件：整机 CPU、内存与各显卡占用，兼作
 面板插件是**浏览器侧的 ESM**，碰不到 `statfs` 与 `nvidia-smi`，故本插件分两半：
 
 ```
-src/index.ts             node 侧：注册 GET /plugin/hardware/hardware
+src/index.ts             node 侧：注册 GET /plugin/hardware/hardware 等端点
 src/probe.ts             型号探测（只探一次）与占用采样
-panel/hardware-cpu.js    面板侧：三枚组件，手写 ESM，不经构建
-panel/hardware-memory.js
-panel/hardware-gpu.js
-panel/lib/store.js       三枚共用的取数与画槽
+src/rings.ts             双色环与三段图例的几何，由 vitest 钉住
+index.js                 面板侧入口：把十枚组件汇总成一个数组
+widgets/hardware-*.js    十枚组件，手写 ESM，不经构建
+widgets/lib/store.js     十枚共用的取数、画环与画表
+style.css                本包自带的样式表，由 webuiPanel.style 声明
 ```
 
-`panel/` 下的 js **无须复制到任何地方** —— 面板会扫每个已装插件的 `panel/` 目录。写法见
-[面板插件](https://github.com/Yunzai-NG/yunzai-ng/blob/main/docs/panel-plugin.md)，本仓库这
-三个文件即是带注释的完整示例。
+浏览器入口固定是包根的 `index.js`，其余靠相对路径由它自己引 —— 整个包目录都是静态可取的。
+写法见[面板插件](https://yunzai-ng.github.io/panel-plugin)，本包这几个文件即是带注释的
+完整示例。
 
-**只有 `panel/` 的顶层 js 被当作组件，子目录不扫**，而静态挂载是整个目录树 —— 于是
-`lib/` 正好用来放三枚共用的代码：取得到，却不会被误当成第四枚组件。三枚各自订阅节拍，
-但同一拍里的三次取数由 `lib/store.js` 收敛成一次请求。
+**几何写在 `src/` 而不是 `widgets/`。** 两段弧的 dasharray 算错**不报错**，只表现为「环画得
+不对」，故它写成 TypeScript 由用例钉住，浏览器侧 import 编译产物（`dist/rings.js`）。这条路
+走得通的前提是 `src/rings.ts` **不 import 任何东西** —— 一旦引了 `node:` 内置模块或 `si`，
+浏览器那侧就会在 import 时报错。
+
+**`.legend-*`、`.sys-*` 与 `.ring-own` 这些类名在面板样式表里没有**，故本包自带一份
+`style.css`。面板会把其中每条选择器限定到本包之后才注入，改不到面板别处；但 `@keyframes`
+的名字是全局的，若要写动画须自加前缀。
 
 ## 取数口径
 
@@ -95,7 +104,7 @@ pnpm run verify         # build → typecheck:test → lint → test
 
 框架发布之后，`pnpm install` 即可满足依赖，该步骤不再必需。
 
-`panel/` 下的 js 不经构建，也**不能 import 裸包名** —— 浏览器按 URL 解析模块说明符，
+`widgets/` 下的 js 不经构建，也**不能 import 裸包名** —— 浏览器按 URL 解析模块说明符，
 `import si from "systeminformation"` 在那里是一条网络错误。要用的能力一概经注入的 `api` 取；
 同目录的相对路径（如 `./lib/store.js`）是 URL，故可以引。
 

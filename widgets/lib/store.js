@@ -15,7 +15,7 @@
  *          **请求失败时保留上一次的数，另记一句错。** 清空会让卡片在一次网络抖动后变成破折号，
  *          而那台机器其实好着 —— 上一次的数配一句「更新失败」更有用。
  */
-import { RING_RADIUS, RING_VIEWBOX, dualRing } from "../../dist/rings.js"
+import { RING_RADIUS, RING_VIEWBOX, dualRing, ringLegend } from "../../dist/rings.js"
 
 /**
  * 两次请求之间的最小间隔
@@ -263,7 +263,51 @@ export function ring(api, title, total, own, note) {
       api.h("b", { class: `ring-value ${level}` }, api.fmt.percent(total))
     ]),
     api.h("span", { class: "gauge-title" }, title),
-    api.h("span", { class: "gauge-hint" }, note)
+    /*
+     * 小字为空时整行不出现，而不是留一个空 span
+     *
+     * 空 span 仍按 `.gauge-hint` 的行高占位，故环与其下的内容之间会多出一段说不清来由的
+     * 空白。带图例那一路（`ringWithLegend`）正是传空串进来的。
+     */
+    note === "" ? null : api.h("span", { class: "gauge-hint" }, note)
+  ])
+}
+
+/**
+ * 一枚双色环，环旁带三段图例
+ *
+ * 与 `ring` 的差别只在图例：那一枚把「其中本进程 x%」写在环下的一行小字里，这一枚把
+ * 三段各自列一行、每行前一枚同色圆点。**三段是「本进程 / 其他占用 / 空闲」**，合起来
+ * 恰是一整圈 —— 故这枚环上的每一种颜色都有名字，包括环底那圈没被覆盖的部分。
+ *
+ * 比例一律取 `dist/rings.js` 的 `ringLegend`（有用例钉住）：「其他占用」是整机减本进程，
+ * 没有任何接口直接给这个数，而算错**不报错**，只表现为三行加起来不是 100%。
+ * @param {object} api 注入的面板能力
+ * @param {string} title 环下的标题
+ * @param {number|undefined} total 整机占用（0-1）
+ * @param {number|undefined} own 本进程占用（0-1）
+ * @param {string} ownLabel 本进程那一段叫什么
+ * @returns {object} vnode
+ */
+export function ringWithLegend(api, title, total, own, ownLabel) {
+  const rows = ringLegend(total, own, ownLabel).map(item =>
+    api.h("div", { class: "legend-row" }, [
+      // 圆点是纯装饰，颜色由类名给出；名字与百分数已把这一行说全，故读屏器不必念它
+      api.h("span", { class: `legend-dot legend-${item.kind}`, "aria-hidden": "true" }),
+      api.h("span", { class: "legend-label" }, item.label),
+      api.h("span", { class: "legend-num" }, api.fmt.percent(item.ratio))
+    ])
+  )
+
+  /*
+   * 环本身照旧交给 `ring`，只是把它环下那行小字留空
+   *
+   * 三段图例已经把每种颜色说全，再补一行「整机占用，其中本进程 x%」就是同一件事说两遍。
+   * 不另写一份画环的代码：两份迟早在半径或叠色顺序上分岔，而那种差别看不出来。
+   */
+  return api.h("div", { class: "ring-legend" }, [
+    ring(api, title, total, own, ""),
+    api.h("div", { class: "legend" }, rows)
   ])
 }
 

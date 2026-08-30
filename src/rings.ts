@@ -110,3 +110,50 @@ export function dualRing(total: number | undefined, own: number | undefined): Du
     totalRatio
   }
 }
+
+/** 环旁图例的一条 */
+export interface RingLegendItem {
+  /** 这一段叫什么，如 `本进程` */
+  readonly label: string
+  /** 该段的比例（0-1）；算不出时 undefined */
+  readonly ratio: number | undefined
+  /**
+   * 该段对应的类名后缀，浏览器侧据它取色
+   *
+   * 三段与环上的两段弧一一对应：`own` 是本进程那一段，`rest` 是「整机减本进程」，
+   * `idle` 是环底那一圈没被覆盖的部分 —— 故图例的颜色无须另外约定，取环的即可。
+   */
+  readonly kind: "own" | "rest" | "idle"
+}
+
+/**
+ * 把一枚环拆成三条图例：本进程、其他、空闲
+ *
+ * **「其他」是算出来的，不是测出来的。** 没有任何接口会告诉你「除本进程之外的占用」——
+ * 它是整机减本进程。故整机测不到时**这一条也测不到**（给 undefined 而非 0）：一条
+ * 「其他进程 0%」会被读成「这台机器上只有机器人在跑」，而实情是还没有第二个采样点。
+ *
+ * 空闲同理由整机算出（1 减整机），故整机测不到时它也不出现。
+ * @param total 整机占用（0-1）；测不到时 undefined
+ * @param own 本进程占用（0-1）；测不到时 undefined
+ * @param ownLabel 本进程那一段叫什么，如 `yunzai-ng`
+ * @returns 三条图例，顺序即自内向外
+ */
+export function ringLegend(
+  total: number | undefined,
+  own: number | undefined,
+  ownLabel: string
+): RingLegendItem[] {
+  const { ownRatio, totalRatio } = dualRing(total, own)
+
+  return [
+    { label: ownLabel, ratio: ownRatio, kind: "own" },
+    {
+      label: "其他占用",
+      // 整机测不到时这一条也测不到，见文件头
+      ratio: totalRatio === undefined ? undefined : Math.max(totalRatio - (ownRatio ?? 0), 0),
+      kind: "rest"
+    },
+    { label: "空闲", ratio: totalRatio === undefined ? undefined : 1 - totalRatio, kind: "idle" }
+  ]
+}
