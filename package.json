@@ -82,8 +82,8 @@
     "systeminformation": "5.33.2"
   },
   "peerDependencies": {
-    "@yunzai-ng/core": "^0.1.0",
-    "@yunzai-ng/types": "^0.1.0"
+    "@yunzai-ng/core": ">=0.1.0",
+    "@yunzai-ng/types": ">=0.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

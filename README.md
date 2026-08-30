@@ -67,19 +67,34 @@ style.css                本包自带的样式表，由 webuiPanel.style 声明
 
 ## 安装
 
-推荐经面板的插件市场安装：面板 → 插件市场 → 搜索 `hardware-plugin` → 安装。
+推荐经**面板商店**安装：面板 → 面板商店 → 搜索 `hardware` → 安装。
 
-亦可手工克隆至主目录的 `plugins/` 下：
+**不是插件市场** —— 那是内核插件的市场，两者的索引与落点都不同。填错地方的表现是「找不到这个
+条目」，因为两份索引的顶层键刻意不同名（`panels` 对 `plugins`）。
+
+商店会代跑装后步骤：装完在包目录内执行 `pnpm install`（连 devDependencies），再跑
+`pnpm run build`。**这一步不能省** —— 本包的 `webuiPanel.server` 指向 `dist/index.js`，
+而 `dist/` 不在 git 里，不编译就只有源码，十枚组件全部取数失败。确认框会把要跑的步骤列出来。
+
+亦可手工克隆至 webui 的面板插件目录下：
 
 ```powershell
-cd <主目录>\plugins
-git clone https://github.com/Yunzai-NG/hardware-plugin.git
-cd hardware-plugin
+cd <主目录>\plugins\webui\plugins
+git clone https://github.com/Yunzai-NG/hardware-plugin.git hardware
+cd hardware
 pnpm install
 pnpm run build
 ```
 
-装好后重载面板（刷新页面即可，组件清单在页面加载时扫一次）。
+手放这条路没有安装动作可挂，故两步要自己跑；也可以放好之后到插件市场页对着这个包点
+「更多 → 装依赖并编译」，那与商店装的是同一条收尾。
+
+::: warning 「更新 webui」会清空那个目录
+面板插件的落点在 webui 安装目录之下，而更新 webui 是整目录替换。改动过的包请留一份备份。
+:::
+
+装好后到插件页**重载 webui**：本包带 node 侧，它的入口只在 webui 的 `setup()` 里 import
+一次，只刷新页面取不到那六条采样路由。
 
 ## 开发
 
